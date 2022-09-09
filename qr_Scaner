@@ -1,0 +1,93 @@
+#!/home/user/virtualenvs_by_virtualenvwrapper/QR_scaner/bin/python3
+
+import os
+import cv2
+import base64
+import shutil
+import configparser
+import collections
+import mysql.connector
+import logging
+from pyzbar.pyzbar import decode
+from pyzbar.pyzbar import ZBarSymbol
+
+config = configparser.RawConfigParser()
+config.read('/home/user/Projects_by_virtualenvwrapper/QR_scaner/qr_Scaner.cfg')
+
+extensions = ('.png', 'jpg')
+
+###create folder
+def create_folder(folder_name):
+    os.makedirs(folder_name,exist_ok=True)
+
+###read parametrs from config file
+def get_config_section():
+    if not hasattr(get_config_section, 'section_dict'):
+        get_config_section.section_dict = collections.defaultdict()
+
+        for section in config.sections():
+            get_config_section.section_dict[section] = dict(config.items(section))
+
+    return get_config_section.section_dict
+
+###preprocessing scan of the document and decode qr-code
+def preprocessing_and_decode(filename,units_dict,parent_out_folder,no_recognized_path):
+    #preprocessing using opencv
+    try:
+        im = cv2.imread(filename, cv2.IMREAD_GRAYSCALE)
+        blur = cv2.GaussianBlur(im, (5, 5), 0)
+        ret, bw_im = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+
+        #zbar
+        text_in_QR = decode(bw_im, symbols = [ZBarSymbol.QRCODE])
+
+        #decode base64
+        decoded_text_from_QR = base64.b64decode(text_in_QR[0].data).decode('cp1251')
+
+        #generate new path to folder
+        for unit_id in units_dict:
+            create_folder(parent_out_folder + units_dict[unit_id])
+            if (unit_id == decoded_text_from_QR[0]):
+                new_path_to_image = parent_out_folder + units_dict[unit_id] + '/'  + os.path.basename(filename)
+        #working with decoded string
+        #add path to moved images
+        if len(decoded_text_from_QR) > 0:
+            lines = decoded_text_from_QR.split("|\n")
+#            lines_with_new_path = [x.strip() + new_path_to_image for x in lines]
+#            return lines_with_new_path
+##            shutil.move(filename,new_path_to_image)
+            for line in lines:
+                array_to_db = line.split("|")
+                array_to_db.extend([new_path_to_image])
+                print(array_to_db)
+        else:
+            print("QR code not detected")
+            shutil.move(filename,no_recognized_path + '/' + os.path.basename(filename))
+    except:
+        shutil.move(filename,no_recognized_path + '/' + os.path.basename(filename))
+
+###connec to database and run query
+def connect_to_DB_and_run_incert_query(host, database, user, password):
+    try:
+        connection = mysql.connector.connect(host = host,
+                                         database = database,
+                                         user = user,
+                                         password = password)
+        if connection.is_connected():
+            print("Connected to MySQL Server")
+    except Error as e:
+        print("Error while connecting to MySQL", e)
+
+
+
+config_dict = get_config_section()
+connect_to_DB_and_run_incert_query(config_dict['mysql_connection']['db_host'], config_dict['mysql_connection']['database'], config_dict['mysql_connection']['username'], config_dict['mysql_connection']['password'])
+
+
+for files in os.listdir(config_dict['qr_Scaner_config']['input_path']):
+    if files.endswith(extensions):
+        preprocessing_and_decode(config_dict['qr_Scaner_config']['input_path'] + files, config_dict['units'], config_dict['qr_Scaner_config']['parent_out_folder'], config_dict['qr_Scaner_config']['no_recognized_path'])
+    else:
+        continue
+
+
